@@ -6,6 +6,7 @@ sys.path.insert(0, "../")
 import argparse
 
 import torch.optim as optim
+from torch.optim import lr_scheduler
 import torch.nn as nn
 import torch
 
@@ -31,6 +32,10 @@ def train(epoch, model, dataloader, optimizer, training):
     for idx, batch in enumerate(dataloader):
         # if idx >= 10:
         #     break
+        current_iter = epoch * len(dataloader) + idx
+        if training:
+            utils.poly_learning_rate(optimizer, args.lr, current_iter, max_iter, power=args.power,
+                                     warmup=args.warmup, warmup_iters=args.warmup_iters)
 
         # 1. PATNetworks forward pass
         batch = utils.to_cuda(batch)
@@ -60,7 +65,7 @@ def train(epoch, model, dataloader, optimizer, training):
     avg_loss = utils.mean(average_meter.loss_buf)
     miou, fb_iou = average_meter.compute_iou()
 
-    return avg_loss, miou, fb_iou
+    return miou, fb_iou
 
 
 if __name__ == '__main__':
@@ -94,6 +99,7 @@ if __name__ == '__main__':
     # Helper classes (for training) initialization
     optimizer = optim.Adam([{"params": model.parameters(), "lr": args.lr}])
 
+
     # ======================= 恢复训练配置 =======================
     # 初始化起始轮次和最佳mIoU
     start_epoch = 0
@@ -121,6 +127,7 @@ if __name__ == '__main__':
     FSSDataset.initialize(img_size=400, datapath=args.datapath)
     dataloader_trn = FSSDataset.build_dataloader(args.benchmark, args.bsz, args.nworker, args.fold, 'trn')
     dataloader_val = FSSDataset.build_dataloader('fss', args.bsz, args.nworker, '0', 'val')
+    max_iter = args.niter * len(dataloader_trn)
 
     # Train HSNet
     # best_val_miou = float('-inf')
@@ -128,21 +135,28 @@ if __name__ == '__main__':
     Logger.info(f"============================================================================")
     Logger.info(f"Training started at: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     Logger.info(f"============================================================================\n")
+
+    epochs_without_improvement = 0
     for epoch in range(start_epoch, args.niter):
         epoch_start_time = time.time()
-        trn_loss, trn_miou, trn_fb_iou = train(epoch, model, dataloader_trn, optimizer, training=True)
+        trn_miou, trn_fb_iou = train(epoch, model, dataloader_trn, optimizer, training=True)
         with torch.no_grad():
-            val_loss, val_miou, val_fb_iou = train(epoch, model, dataloader_val, optimizer, training=False)
+            val_miou, val_fb_iou = train(epoch, model, dataloader_val, optimizer, training=False)
+
 
         # Save the best model
         if val_miou > best_val_miou:
             best_val_miou = val_miou
             Logger.save_model_miou(model, epoch, val_miou)
+            epochs_without_improvement = 0  # 重置计数器
+        else:
+            epochs_without_improvement += 1  # 性能没有提升，计数器加一
 
-        Logger.tbd_writer.add_scalars('data/loss', {'trn_loss': trn_loss, 'val_loss': val_loss}, epoch)
-        Logger.tbd_writer.add_scalars('data/miou', {'trn_miou': trn_miou, 'val_miou': val_miou}, epoch)
-        Logger.tbd_writer.add_scalars('data/fb_iou', {'trn_fb_iou': trn_fb_iou, 'val_fb_iou': val_fb_iou}, epoch)
-        Logger.tbd_writer.flush()
+
+
+        if epochs_without_improvement >= args.early_stopping_patience:
+            Logger.info(f"Early stopping triggered after {args.early_stopping_patience} epochs without improvement.")
+            break  # 退出训练循环
 
         epoch_duration_sec = time.time() - epoch_start_time
         end_time_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -154,5 +168,5 @@ if __name__ == '__main__':
         time_info = f'End Time: {end_time_str}'
         Logger.info(f'{duration_info}\n{time_info}')
         Logger.info(f"============================================================================\n")
-    Logger.tbd_writer.close()
+    # Logger.tbd_writer.close()
     Logger.info('==================== Finished Training ====================')

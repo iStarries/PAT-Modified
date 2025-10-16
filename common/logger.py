@@ -117,8 +117,6 @@ class Logger:
         console.setFormatter(formatter)
         logging.getLogger('').addHandler(console)
 
-        # Tensorboard writer
-        cls.tbd_writer = SummaryWriter(os.path.join(cls.logpath, 'tbd/runs'))
 
         # Log arguments
         logging.info('\n:=========== Cross-Domain Few-shot Seg. with PATNet ===========')
@@ -133,17 +131,18 @@ class Logger:
 
     @classmethod
     def save_model_miou(cls, model, epoch, val_miou):
+        # 获取模型权重
         state_dict = model.module.state_dict()
 
-        # --- 功能 1: 覆盖保存“最佳模型” ---
-        torch.save(state_dict, os.path.join(cls.logpath, 'best_model.pt'))
-        cls.info('Model saved @%d w/ val. mIoU: %5.2f.' % (epoch, val_miou))
-
-        # --- 功能 2: 新增逻辑，额外保存带轮次信息的新文件 ---
-        checkpoint_name = f'model_epoch_{epoch}_miou_{val_miou:.2f}.pt'
+        # 1. 构造新的文件名，格式为 mIoU 在前, epoch 在后
+        checkpoint_name = f'model_miou_{val_miou:.2f}_epoch_{epoch}.pt'
         checkpoint_path = os.path.join(cls.logpath, checkpoint_name)
+
+        # 2. 保存新的权重文件
         torch.save(state_dict, checkpoint_path)
-        cls.info(f'Additionally saved checkpoint to: {checkpoint_path}\n')
+
+        # 3. 打印清晰的日志信息，指明新保存的文件路径
+        cls.info(f'New best model saved to: {checkpoint_path}\n')
 
     @classmethod
     def log_params(cls, model):
