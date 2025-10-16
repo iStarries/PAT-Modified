@@ -1,4 +1,5 @@
 r""" PATNet training (validation) code """
+import os
 import sys
 sys.path.insert(0, "../")
 
@@ -92,22 +93,42 @@ if __name__ == '__main__':
 
     # Helper classes (for training) initialization
     optimizer = optim.Adam([{"params": model.parameters(), "lr": args.lr}])
+
+    # ======================= 恢复训练配置 =======================
+    # 初始化起始轮次和最佳mIoU
+    start_epoch = 0
+    best_val_miou = float('-inf')
+
+    # 如果 config 文件中 resume 为 True，则加载模型
+    if hasattr(args, 'resume') and args.resume:
+        if os.path.isfile(args.load_path):
+            Logger.info(f"Loading checkpoint from: {args.load_path}")
+            # 加载权重文件
+            checkpoint = torch.load(args.load_path)
+            # 加载模型权重
+            model.module.load_state_dict(checkpoint)
+            # 设置起始轮次
+            start_epoch = args.start_epoch
+            Logger.info(f"Resuming training from epoch {start_epoch}")
+        else:
+            Logger.info(f"Checkpoint not found at: {args.load_path}")
+    # ==========================================================
+
     scaler = GradScaler()  # <-- 添加这一行
     Evaluator.initialize()
 
     # Dataset initialization
     FSSDataset.initialize(img_size=400, datapath=args.datapath)
     dataloader_trn = FSSDataset.build_dataloader(args.benchmark, args.bsz, args.nworker, args.fold, 'trn')
-    FSSDataset.initialize(img_size=400, datapath=args.datapath)
     dataloader_val = FSSDataset.build_dataloader('fss', args.bsz, args.nworker, '0', 'val')
 
     # Train HSNet
-    best_val_miou = float('-inf')
+    # best_val_miou = float('-inf')
     best_val_loss = float('inf')
     Logger.info(f"============================================================================")
     Logger.info(f"Training started at: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     Logger.info(f"============================================================================\n")
-    for epoch in range(args.niter):
+    for epoch in range(start_epoch, args.niter):
         epoch_start_time = time.time()
         trn_loss, trn_miou, trn_fb_iou = train(epoch, model, dataloader_trn, optimizer, training=True)
         with torch.no_grad():

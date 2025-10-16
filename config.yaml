@@ -10,12 +10,18 @@ train:
   bsz: 20
   niter: 2000
   nworker: 8
+# ======================= 恢复训练配置 =======================
+#   Additionally saved checkpoint to
+  resume: 1                # 设置为 True 来激活“恢复训练”模式
+  load_path: '/media/wyh/PAT/logs/pascal_resnet50_run1/best_model.pt' # 上一次的最佳权重路径
+  start_epoch: 11             # 从第 x 轮开始
+# ==========================================================
 
 # ================= Testing Configurations ==================
 #   python test.py
 test:
   datapath: '/media/wyh/data' # 测试时使用包含所有数据集的根目录
-  load_model_path: 'logs/pascal_resnet50_run1/best_model.pt' # 训练后生成的模型路径
+  load_model_path: '/media/wyh/PAT/logs/pascal_resnet50_run1/best_model.pt' # 训练后生成的模型路径
   backbone: 'resnet50'
 
   # --- 在这里选择要测试的数据集 ---

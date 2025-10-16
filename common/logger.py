@@ -94,11 +94,21 @@ class Logger:
         cls.benchmark = args.benchmark
         os.makedirs(cls.logpath, exist_ok=True)
 
-        logging.basicConfig(filemode='w',
+        logging.basicConfig(filemode='a',
                             filename=os.path.join(cls.logpath, 'log.txt'),
                             level=logging.INFO,
                             format='%(message)s',
                             datefmt='%m-%d %H:%M:%S')
+
+        # ======================= 恢复训练配置 =======================
+        # 如果是恢复训练，则在日志中添加一个清晰的分隔符
+        if hasattr(args, 'resume') and args.resume:
+            logging.info('\n' + '=' * 60)
+            logtime = datetime.datetime.now().__format__('%Y-%m-%d %H:%M:%S')
+            logging.info(f'RESUMING TRAINING AT: {logtime}')
+            logging.info('=' * 60 + '\n')
+        # ==========================================================
+
 
         # Console log config
         console = logging.StreamHandler()
