@@ -11,6 +11,15 @@ The Cross-Domain Few-Shot Semantic Segmentation includes data from the Deepglobe
 </p>
 We study the CD-FSS problem, where the source and target domains have completely disjoint label space and cannot access target domain data during the training stage. 
 
+## 模型结构与训练配置概览
+
+* **骨干网络（Backbone）**：支持 `vgg16` 与 `resnet50` 两种架构。模型通过 `model/base/feature.py` 中的 `extract_feat_vgg` 或 `extract_feat_res` 提取多尺度特征，并在浅层阶段（默认 `resnet50` 的 `layer1`）为支持分支预留插桩点。
+* **低层增强模块（LEM）**：`model/base/lem.py` 实现的 `LowLevelEnhancingModule` 会在支持分支的浅层特征上执行一次随机卷积和频域幅值-相位重组，产生扰动后的张量 `F_t^s`。模块仅在 `PATNetwork` 的 `forward_support_lowlevel` 钩子内对支持图像生效，查询分支保持原始特征流。`lem_stage` 参数可设定挂载位置（如 `layer1`、`layer2`），`lem_sigma` 与 `lem_kernel_size` 分别控制随机卷积核的标准差与尺寸。
+* **特征匹配与预测**：扰动后的支持特征仍会进入后续的原型构建、`Correlation.multilayer_correlation` 相关性模块以及 `HPNLearner` 匹配头，最终生成分割掩码预测，原始的交叉熵损失保持不变。
+* **优化设置**：默认训练脚本 `train.py` 使用 Adam 优化器与多项式学习率衰减策略；若需要复现 LEM 论文的设定，可在自定义训练循环中选用 SGD（学习率 `1e-3`、动量 `0.9`）并维持原有的分割损失。
+* **关键配置**：训练与测试时的常用超参数（数据路径、批量大小、折数等）集中在 `config.yaml` 中，可直接修改后配合 `train.py` / `test.py` 运行。
+
+
 
 ## Datasets
 The following datasets are used for evaluation in CD-FSS:

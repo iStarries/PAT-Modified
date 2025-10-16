@@ -37,14 +37,16 @@ class HPNLearner(nn.Module):
         self.encoder_layer3to2 = make_building_block(outch3, [outch3, outch3, outch3], [3, 3, 3], [1, 1, 1])
 
         # Decoder layers
-        self.decoder1 = nn.Sequential(nn.Conv2d(outch3, outch3, (3, 3), padding=(1, 1), bias=True),
-                                      nn.ReLU(),
-                                      nn.Conv2d(outch3, outch2, (3, 3), padding=(1, 1), bias=True),
-                                      nn.ReLU())
+        self.decoder1 = nn.Sequential(
+            nn.Conv2d(outch3, outch3, (3, 3), padding=(1, 1), bias=True),
+            nn.ReLU(),
+            nn.Conv2d(outch3, outch2, (3, 3), padding=(1, 1), bias=True),
+            nn.ReLU(),
+        )
 
-        self.decoder2 = nn.Sequential(nn.Conv2d(outch2, outch2, (3, 3), padding=(1, 1), bias=True),
-                                      nn.ReLU(),
-                                      nn.Conv2d(outch2, 2, (3, 3), padding=(1, 1), bias=True))
+        self.decoder2_conv1 = nn.Conv2d(outch2, outch2, (3, 3), padding=(1, 1), bias=True)
+        self.decoder2_relu = nn.ReLU()
+        self.decoder2_conv2 = nn.Conv2d(outch2, 2, (3, 3), padding=(1, 1), bias=True)
 
     def interpolate_support_dims(self, hypercorr, spatial_size=None):
         bsz, ch, ha, wa, hb, wb = hypercorr.size()
@@ -77,6 +79,7 @@ class HPNLearner(nn.Module):
         hypercorr_decoded = self.decoder1(hypercorr_encoded)
         upsample_size = (hypercorr_decoded.size(-1) * 2,) * 2
         hypercorr_decoded = F.interpolate(hypercorr_decoded, upsample_size, mode='bilinear', align_corners=True)
-        logit_mask = self.decoder2(hypercorr_decoded)
+        feat_map = self.decoder2_relu(self.decoder2_conv1(hypercorr_decoded))
+        logit_mask = self.decoder2_conv2(feat_map)
 
-        return logit_mask
+        return logit_mask, feat_map

@@ -61,12 +61,14 @@ class DatasetLung(Dataset):
         query_mask = self.read_mask(query_name)
         support_masks = [self.read_mask(name) for name in support_names]
 
-        query_id = query_name[:-9] + '.png'
-        query_img = Image.open(os.path.join(self.img_path, os.path.basename(query_id))).convert('RGB')
+        # 正确地通过替换后缀从掩码文件名导出图像文件名
+        query_img_basename = os.path.basename(query_name).replace('_mask.png', '.png')
+        query_img = Image.open(os.path.join(self.img_path, query_img_basename)).convert('RGB')
 
-        support_ids = [os.path.basename(name)[:-9] + '.png' for name in support_names]
-        support_names = [os.path.join(self.img_path, sid) for sid in support_ids]
-        support_imgs = [Image.open(name).convert('RGB') for name in support_names]
+        # 对所有 support 图像应用相同的逻辑
+        support_img_basenames = [os.path.basename(name).replace('_mask.png', '.png') for name in support_names]
+        support_img_paths = [os.path.join(self.img_path, sid) for sid in support_img_basenames]
+        support_imgs = [Image.open(name).convert('RGB') for name in support_img_paths]
 
         return query_img, query_mask, support_imgs, support_masks
 

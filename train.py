@@ -15,8 +15,6 @@ from common.logger import Logger, AverageMeter
 from common.evaluation import Evaluator
 from common import utils
 from data.dataset import FSSDataset
-
-from torch.cuda.amp import autocast, GradScaler # <-- 添加这一行
 import time  # <-- 添加这一行
 import datetime  # <-- 添加这一行
 
@@ -40,26 +38,42 @@ def train(epoch, model, dataloader, optimizer, training):
         # 1. PATNetworks forward pass
         batch = utils.to_cuda(batch)
 
-        with autocast():
-            logit_mask = model(batch['query_img'], batch['support_imgs'].squeeze(1), batch['support_masks'].squeeze(1))
-            loss = model.module.compute_objective(logit_mask, batch['query_mask'])
+        logit_mask, feat_map = model(batch['query_img'], batch['support_imgs'].squeeze(1), batch['support_masks'].squeeze(1))
+        loss_seg = model.module.compute_objective(logit_mask, batch['query_mask'])
+
+        if training:
+            loss_intra, loss_inter = model.module.compute_metric_losses(
+                feat_map,
+                batch['query_mask'],
+                max_points_per_class=args.max_points_per_class,
+                detach_prototype=args.detach_prototype,
+                ignore_label=getattr(args, 'ignore_label', 255),
+            )
+        else:
+            zero = loss_seg.new_zeros(1).squeeze(0)
+            loss_intra, loss_inter = zero.clone(), zero.clone()
+
+        loss = loss_seg + args.lambda_intra * loss_intra + args.lambda_inter * loss_inter
 
         pred_mask = logit_mask.argmax(dim=1)
 
         # 2. Compute loss & update model parameters
         if training:
             optimizer.zero_grad()
-            # 使用 scaler 缩放损失并进行反向传播
-            scaler.scale(loss).backward()
-            # 使用 scaler 更新权重
-            scaler.step(optimizer)
-            scaler.update()
+            loss.backward()
+            optimizer.step()
 
         # 3. Evaluate prediction
         area_inter, area_union = Evaluator.classify_prediction(pred_mask, batch)
-        average_meter.update(area_inter, area_union, batch['class_id'], loss.detach().clone())
+        loss_components = {
+            'total': loss.detach().clone(),
+            'seg': loss_seg.detach().clone(),
+            'intra': loss_intra.detach().clone(),
+            'inter': loss_inter.detach().clone(),
+        }
+        average_meter.update(area_inter, area_union, batch['class_id'], loss.detach().clone(), loss_components)
         average_meter.write_process(idx, len(dataloader), epoch, write_batch_idx=50)
-
+    print()
     # Write evaluation results
     average_meter.write_result('Training' if training else 'Validation', epoch)
     avg_loss = utils.mean(average_meter.loss_buf)
@@ -120,7 +134,6 @@ if __name__ == '__main__':
             Logger.info(f"Checkpoint not found at: {args.load_path}")
     # ==========================================================
 
-    scaler = GradScaler()  # <-- 添加这一行
     Evaluator.initialize()
 
     # Dataset initialization

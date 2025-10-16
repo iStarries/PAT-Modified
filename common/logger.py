@@ -2,6 +2,7 @@ r""" Logging during training/testing """
 import datetime
 import logging
 import os
+import sys
 
 from tensorboardX import SummaryWriter
 import torch
@@ -36,13 +37,23 @@ class AverageMeter:
         self.union_buf = torch.zeros([2, self.nclass]).float().cuda()
         self.ones = torch.ones_like(self.union_buf)
         self.loss_buf = []
-
-    def update(self, inter_b, union_b, class_id, loss):
+        self.loss_components = {
+            'total': [],
+            'seg': [],
+            'intra': [],
+            'inter': [],
+        }
+    def update(self, inter_b, union_b, class_id, loss=None, loss_components=None):
         self.intersection_buf.index_add_(1, class_id, inter_b.float())
         self.union_buf.index_add_(1, class_id, union_b.float())
         if loss is None:
-            loss = torch.tensor(0.0)
+            loss = torch.tensor(0.0, device=self.intersection_buf.device)
         self.loss_buf.append(loss)
+        if loss_components is not None:
+            for key, value in loss_components.items():
+                if key not in self.loss_components:
+                    self.loss_components[key] = []
+                self.loss_components[key].append(value)
 
     def compute_iou(self):
         iou = self.intersection_buf.float() / \
@@ -61,7 +72,14 @@ class AverageMeter:
         loss_buf = torch.stack(self.loss_buf)
         msg = '\n*** %s ' % split
         msg += '[@Epoch %02d] ' % epoch
-        msg += 'Avg L: %6.5f  ' % loss_buf.mean()
+        msg += 'Avg L: %6.5f  ' % loss_buf.mean().item()
+        if self.loss_components['seg']:
+            seg_mean = torch.stack(self.loss_components['seg']).mean().item()
+            intra_mean = torch.stack(self.loss_components['intra']).mean().item()
+            inter_mean = torch.stack(self.loss_components['inter']).mean().item()
+            msg += f"Seg: {seg_mean:.5f}   "
+            msg += f"Intra: {intra_mean:.5f}   "
+            msg += f"Inter: {inter_mean:.5f}   "
         msg += 'mIoU: %5.2f   ' % iou
         msg += 'FB-IoU: %5.2f   ' % fb_iou
 
@@ -70,16 +88,30 @@ class AverageMeter:
 
     def write_process(self, batch_idx, datalen, epoch, write_batch_idx=20):
         if batch_idx % write_batch_idx == 0:
-            msg = '[Epoch: %02d] ' % epoch if epoch != -1 else ''
-            msg += '[Batch: %04d/%04d] ' % (batch_idx+1, datalen)
+            # 1. 计算指标 (与原来相同)
             iou, fb_iou = self.compute_iou()
-            if epoch != -1:
-                loss_buf = torch.stack(self.loss_buf)
-                msg += 'L: %6.5f  ' % loss_buf[-1]
-                msg += 'Avg L: %6.5f  ' % loss_buf.mean()
-            msg += 'mIoU: %5.2f  |  ' % iou
-            msg += 'FB-IoU: %5.2f' % fb_iou
-            Logger.info(msg)
+            loss_buf = torch.stack(self.loss_buf)
+            avg_loss = loss_buf.mean().item()
+            seg_text = intra_text = inter_text = ''
+            if self.loss_components['seg']:
+                seg_mean = torch.stack(self.loss_components['seg']).mean().item()
+                intra_mean = torch.stack(self.loss_components['intra']).mean().item()
+                inter_mean = torch.stack(self.loss_components['inter']).mean().item()
+                seg_text = f" | Seg: {seg_mean:.5f}"
+                intra_text = f" | Intra: {intra_mean:.5f}"
+                inter_text = f" | Inter: {inter_mean:.5f}"
+
+            # 2. 构建简化的单行消息
+            #    - \r: 将光标移动到行首
+            #    - 空格填充: 确保新内容能完全覆盖旧内容
+            msg = (f"\r[Epoch: {epoch:02d}] [Batch: {batch_idx + 1:05d}/{datalen:05d}] | "
+                   f"Avg L: {avg_loss:.5f}{seg_text}{intra_text}{inter_text} | "
+                   f"mIoU: {iou:5.2f} | "
+                   f"FB-IoU: {fb_iou:5.2f}      ")
+
+            # 3. 直接写入标准输出，不换行
+            sys.stdout.write(msg)
+            sys.stdout.flush()
 
 
 class Logger:

@@ -70,7 +70,24 @@ if __name__ == '__main__':
 
     # Load trained model
     if args.load == '': raise Exception('Pretrained model not specified.')
-    model.load_state_dict(torch.load(args.load))
+
+    # 1. 加载原始权重到 cpu，避免占用 GPU
+    state_dict = torch.load(args.load, map_location=torch.device('cpu'))
+
+    # 2. 创建一个新的有序字典来存放修正后的键
+    from collections import OrderedDict
+
+    new_state_dict = OrderedDict()
+
+    # 3. 遍历旧字典的键，并为每个键添加 'module.' 前缀
+    for k, v in state_dict.items():
+        name = 'module.' + k  # 添加 'module.' 前缀
+        new_state_dict[name] = v
+
+    # 4. 加载修正后的 state_dict
+    model.load_state_dict(new_state_dict)
+
+    print("Successfully loaded pretrained weights.")  # 添加一个成功加载的提示
 
     # Helper classes (for testing) initialization
     Evaluator.initialize()

@@ -11,10 +11,11 @@ from torchvision.models import vgg
 from .base.feature import extract_feat_vgg, extract_feat_res
 from .base.correlation import Correlation
 from .learner import HPNLearner
+from .base.lem import LowLevelEnhancingModule
 
 
 class PATNetwork(nn.Module):
-    def __init__(self, backbone):
+    def __init__(self, backbone, use_lem=False, lem_stage='layer1', lem_sigma=0.1, lem_kernel_size=3):
         super(PATNetwork, self).__init__()
 
         # 1. Backbone network initialization
@@ -33,6 +34,7 @@ class PATNetwork(nn.Module):
             self.reference_layer1 = nn.Linear(512, 2, bias=True)
             nn.init.kaiming_normal_(self.reference_layer1.weight, a=0, mode='fan_in', nonlinearity='linear')
             nn.init.constant_(self.reference_layer1.bias, 0)
+            self.low_level_stage = None
         elif backbone == 'resnet50':
             self.backbone = resnet.resnet50(pretrained=True)
             self.feat_ids = list(range(4, 17))
@@ -47,6 +49,7 @@ class PATNetwork(nn.Module):
             self.reference_layer1 = nn.Linear(512, 2, bias=True)
             nn.init.kaiming_normal_(self.reference_layer1.weight, a=0, mode='fan_in', nonlinearity='linear')
             nn.init.constant_(self.reference_layer1.bias, 0)
+            self.low_level_stage = self._resolve_stage(lem_stage) if use_lem else None
         else:
             raise Exception('Unavailable backbone: %s' % backbone)
 
@@ -56,11 +59,21 @@ class PATNetwork(nn.Module):
         self.backbone.eval()
         self.hpn_learner = HPNLearner(list(reversed(nbottlenecks[-3:])))
         self.cross_entropy_loss = nn.CrossEntropyLoss()
+        self.low_level_module = LowLevelEnhancingModule(sigma=lem_sigma, kernel_size=lem_kernel_size) if use_lem else None
+        self.enable_low_level_enhance = use_lem
 
     def forward(self, query_img, support_img, support_mask):
         with torch.no_grad():
             query_feats = self.extract_feats(query_img, self.backbone, self.feat_ids, self.bottleneck_ids, self.lids)
-            support_feats = self.extract_feats(support_img, self.backbone, self.feat_ids, self.bottleneck_ids, self.lids)
+            support_feats = self.extract_feats(
+                support_img,
+                self.backbone,
+                self.feat_ids,
+                self.bottleneck_ids,
+                self.lids,
+                low_level_hook=self.forward_support_lowlevel if self._should_apply_low_level_hook() else None,
+                hook_stage=self.low_level_stage,
+            )
             support_feats, prototypes_f, prototypes_b = self.mask_feature(support_feats, support_mask.clone())
         query_feats, support_feats = self.Transformation_Feature(query_feats, support_feats, prototypes_f, prototypes_b)
         corr = Correlation.multilayer_correlation(query_feats, support_feats, self.stack_ids)
@@ -141,8 +154,15 @@ class PATNetwork(nn.Module):
         kl_agg = 0
         cos_agg = 0
         for s_idx in range(nshot):
-            support_feats_wo_mask = self.extract_feats(batch['support_imgs'][:, s_idx], self.backbone, self.feat_ids,
-                                               self.bottleneck_ids, self.lids)
+            support_feats_wo_mask = self.extract_feats(
+                batch['support_imgs'][:, s_idx],
+                self.backbone,
+                self.feat_ids,
+                self.bottleneck_ids,
+                self.lids,
+                low_level_hook=self.forward_support_lowlevel if self._should_apply_low_level_hook() else None,
+                hook_stage=self.low_level_stage,
+            )
             support_feats, prototypes_sf, prototypes_sb = self.mask_feature(support_feats_wo_mask,
                                                                             batch['support_masks'][:, s_idx].clone())
             query_feats = self.extract_feats(batch['query_img'], self.backbone, self.feat_ids, self.bottleneck_ids, self.lids)
@@ -192,3 +212,31 @@ class PATNetwork(nn.Module):
     def train_mode(self):
         self.train()
         self.backbone.eval()  # to prevent BN from learning data statistics with exponential averaging
+
+    def forward_support_lowlevel(self, feature):
+        if not self.enable_low_level_enhance or self.low_level_module is None or not self.training:
+            return feature
+        return self.low_level_module(feature)
+
+    def set_low_level_enhancer_state(self, enabled: bool):
+        self.enable_low_level_enhance = enabled
+
+    def _should_apply_low_level_hook(self):
+        return self.low_level_module is not None and self.enable_low_level_enhance and self.low_level_stage is not None
+
+    def _resolve_stage(self, stage):
+        if isinstance(stage, int):
+            if stage < 1 or stage > 4:
+                raise ValueError('lem_stage must be between 1 and 4 for ResNet backbones')
+            return stage
+        if isinstance(stage, str):
+            stage = stage.lower()
+            if stage.startswith('layer'):
+                stage = stage.replace('layer', '')
+            elif stage.startswith('stage'):
+                stage = stage.replace('stage', '')
+            stage_id = int(stage)
+            if stage_id < 1 or stage_id > 4:
+                raise ValueError('lem_stage must be between 1 and 4 for ResNet backbones')
+            return stage_id
+        raise ValueError('Unsupported lem_stage value: %r' % stage)
