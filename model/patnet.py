@@ -58,7 +58,7 @@ class PATNetwork(nn.Module):
         self.stack_ids = torch.tensor(self.lids).bincount().__reversed__().cumsum(dim=0)[:3]
         self.backbone.eval()
         self.hpn_learner = HPNLearner(list(reversed(nbottlenecks[-3:])))
-        self.cross_entropy_loss = nn.CrossEntropyLoss()
+        self.cross_entropy_loss = nn.CrossEntropyLoss(ignore_index=255)
         self.low_level_module = LowLevelEnhancingModule(sigma=lem_sigma, kernel_size=lem_kernel_size) if use_lem else None
         self.enable_low_level_enhance = use_lem
 
@@ -78,10 +78,20 @@ class PATNetwork(nn.Module):
         query_feats, support_feats = self.Transformation_Feature(query_feats, support_feats, prototypes_f, prototypes_b)
         corr = Correlation.multilayer_correlation(query_feats, support_feats, self.stack_ids)
 
-        logit_mask = self.hpn_learner(corr)
-        logit_mask = F.interpolate(logit_mask, support_img.size()[2:], mode='bilinear', align_corners=True)
+        # hpn_learner 返回 (logit_mask, feat_map)
+        logit_mask, feat_map = self.hpn_learner(corr)
 
-        return logit_mask
+        # 把预测的 mask logits 上采样到输入分辨率
+        # 你现在用的是 support_img.size()[2:], 如果你的数据管线里 query 和 support 是同尺寸裁剪，这没问题
+        logit_mask = F.interpolate(
+            logit_mask,
+            query_img.size()[2:],  # <- 用 query_img 对齐监督标签
+            mode='bilinear',
+            align_corners=True,
+        )
+
+        # 返回两个张量，和 train.py 的期望一致
+        return logit_mask, feat_map
 
     def mask_feature(self, features, support_mask):
         eps = 1e-6

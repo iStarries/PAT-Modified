@@ -45,57 +45,74 @@ def compute_prototype_losses(
             f"expected {(b, h, w)}, got {tuple(labels.shape)}"
         )
 
-    feat_flat = feat_map.permute(0, 2, 3, 1).reshape(-1, c)
-    labels_flat = labels.reshape(-1)
+    feat_map = feat_map.permute(0, 2, 3, 1).reshape(b, h * w, c)
+    labels = labels.reshape(b, h * w)
 
-    valid_mask = labels_flat != ignore_label
-    if not torch.any(valid_mask):
-        return loss_zero, loss_zero.clone()
-
-    valid_labels = labels_flat[valid_mask]
-    unique_labels = torch.unique(valid_labels)
-    if unique_labels.numel() == 0:
-        return loss_zero, loss_zero.clone()
-
-    prototypes = []
     intra_losses = []
+    inter_losses = []
 
-    for class_id in unique_labels:
-        class_mask = valid_mask & (labels_flat == class_id)
-        idx = torch.nonzero(class_mask, as_tuple=False).squeeze(-1)
-        if idx.numel() == 0:
+    for batch_idx in range(b):
+        sample_labels = labels[batch_idx]
+        sample_feats = feat_map[batch_idx]
+
+        valid_mask = sample_labels != ignore_label
+        if not torch.any(valid_mask):
             continue
 
-        if max_points_per_class > 0 and idx.numel() > max_points_per_class:
-            perm = torch.randperm(idx.numel(), device=device)[:max_points_per_class]
-            idx = idx[perm]
+        valid_labels = sample_labels[valid_mask]
+        unique_labels = torch.unique(valid_labels)
+        if unique_labels.numel() == 0:
+            continue
 
-        class_features = feat_flat.index_select(0, idx)
-        prototype = class_features.mean(dim=0, keepdim=True)
+        sample_prototypes = []
 
-        prototype_for_intra = prototype.detach() if detach_prototype else prototype
-        diffs = class_features - prototype_for_intra
-        class_intra = (diffs.pow(2).sum(dim=1)).mean()
-        intra_losses.append(class_intra)
+        for class_id in unique_labels:
+            class_mask = valid_mask & (sample_labels == class_id)
+            idx = torch.nonzero(class_mask, as_tuple=False).squeeze(-1)
+            if idx.numel() == 0:
+                continue
 
-        prototypes.append(prototype)
+            if max_points_per_class > 0 and idx.numel() > max_points_per_class:
+                perm = torch.randperm(idx.numel(), device=device)[:max_points_per_class]
+                idx = idx[perm]
 
-    if not prototypes:
+            class_features = sample_feats.index_select(0, idx)
+            prototype = class_features.mean(dim=0, keepdim=True)
+
+            prototype_for_intra = prototype.detach() if detach_prototype else prototype
+            diffs = class_features - prototype_for_intra
+            class_intra = (diffs.pow(2).sum(dim=1)).mean()
+            intra_losses.append(class_intra)
+
+            sample_prototypes.append(prototype)
+
+        if not sample_prototypes:
+            continue
+
+        prototypes_tensor = torch.cat(sample_prototypes, dim=0)
+        prototypes_for_inter = (
+            prototypes_tensor.detach() if detach_prototype else prototypes_tensor
+        )
+
+        if prototypes_tensor.size(0) < 2:
+            continue
+
+        diff = prototypes_for_inter.unsqueeze(0) - prototypes_for_inter.unsqueeze(1)
+        dist_sq = (diff.pow(2)).sum(dim=-1)
+        triu_idx = torch.triu_indices(
+            prototypes_tensor.size(0), prototypes_tensor.size(0), offset=1, device=device
+        )
+        pairwise_dist = dist_sq[triu_idx[0], triu_idx[1]]
+        inter_losses.append(-pairwise_dist.mean())
+
+    if not intra_losses:
         return loss_zero, loss_zero.clone()
-
-    prototypes_tensor = torch.cat(prototypes, dim=0)
-    prototypes_for_inter = prototypes_tensor.detach() if detach_prototype else prototypes_tensor
 
     loss_intra = torch.stack(intra_losses).mean()
 
-    num_classes = prototypes_tensor.size(0)
-    if num_classes < 2:
+    if not inter_losses:
         loss_inter = loss_zero.clone()
     else:
-        diff = prototypes_for_inter.unsqueeze(0) - prototypes_for_inter.unsqueeze(1)
-        dist_sq = (diff.pow(2)).sum(dim=-1)
-        triu_idx = torch.triu_indices(num_classes, num_classes, offset=1, device=device)
-        pairwise_dist = dist_sq[triu_idx[0], triu_idx[1]]
-        loss_inter = -pairwise_dist.mean()
+        loss_inter = torch.stack(inter_losses).mean()
 
     return loss_intra, loss_inter

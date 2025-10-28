@@ -17,6 +17,9 @@ from common import utils
 from data.dataset import FSSDataset
 import time  # <-- 添加这一行
 import datetime  # <-- 添加这一行
+from model.base.metric_losses import compute_prototype_losses
+import torch.nn.functional as F
+
 
 def train(epoch, model, dataloader, optimizer, training):
     r""" Train PATNet """
@@ -42,8 +45,16 @@ def train(epoch, model, dataloader, optimizer, training):
         loss_seg = model.module.compute_objective(logit_mask, batch['query_mask'])
 
         if training:
-            loss_intra, loss_inter = model.module.compute_metric_losses(
+            # 把特征图插值到和 query_mask 一样的 H,W
+            feat_map_up = F.interpolate(
                 feat_map,
+                size=batch['query_mask'].shape[-2:],  # (H, W) = (400,400)
+                mode='bilinear',
+                align_corners=True,
+            )
+
+            loss_intra, loss_inter = compute_prototype_losses(
+                feat_map_up,
                 batch['query_mask'],
                 max_points_per_class=args.max_points_per_class,
                 detach_prototype=args.detach_prototype,
