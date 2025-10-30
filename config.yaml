@@ -6,8 +6,8 @@ train:
   logpath: 'pascal_resnet50_run_none'               #！！！！！
   backbone: 'resnet50' # 'vgg16' or 'resnet50'
   fold: 4             # 0, 1, 2, 3, 4
-  lr: 0.002
-  bsz: 12
+  lr: 0.001
+  bsz: 20
   niter: 2000
   nworker: 8
 
